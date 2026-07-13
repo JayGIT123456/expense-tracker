@@ -30,13 +30,20 @@ FIELDNAMES = ["id", "date", "amount", "category", "description"]
 def load_expenses(path):
     if not os.path.exists(path):
         return []
-    with open(path, newline="", encoding="utf-8") as f:
+    with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        rows = list(reader)
-    for row in rows:
-        row["id"] = int(row["id"])
-        row["amount"] = float(row["amount"])
-    return rows
+        raw_rows = list(reader)
+
+    expenses = []
+    for line_num, row in enumerate(raw_rows, start=2):  # header is line 1
+        try:
+            row["id"] = int(row["id"])
+            row["amount"] = float(row["amount"])
+        except (TypeError, ValueError, KeyError) as exc:
+            print(f"Warning: skipping malformed row at line {line_num} in {path} ({exc})", file=sys.stderr)
+            continue
+        expenses.append(row)
+    return expenses
 
 
 def save_expenses(path, expenses):
@@ -159,3 +166,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
