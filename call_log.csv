@@ -1,0 +1,3 @@
+date,contact,company,phone,email,channel,industry,pain_points,cost_signals,objections,decision_maker,next_step,score,temperature,why,source
+2026-07-28,Marcus,Coastal Bay Realty,(305) 555-0182,marcus.delgado@coastalbayrealty.com,Cold call,Real estate,falling through; manually,"$9,500; 6 leads a month",VA didn't work before; Doesn't want a robot,Yes,Booked: Thursday at 2,4,HOT,named a specific pain; attached a number to it; is the decision maker; appointment booked,sample_transcript.txt
+2026-07-28,Priya,Lumina Wellness Spa,,priya@luminawellnessspa.com,Follow-up call,Wellness / med spa,backed up,,Send info first,No,"Send info, then lock calendar",1,WARM,named a specific pain,sample_transcript_2.txt
