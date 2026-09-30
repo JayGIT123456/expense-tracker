@@ -1,7 +1,8 @@
 # Cowork exercises
 
-Three small command-line tools. See [Dialer Compliance Gate](#dialer-compliance-gate),
-[Call Logger](#call-logger) and [Expense Tracker CLI](#expense-tracker-cli).
+Four small command-line tools. See [Dialer Compliance Gate](#dialer-compliance-gate),
+[Dialer Pacer](#dialer-pacer), [Call Logger](#call-logger) and
+[Expense Tracker CLI](#expense-tracker-cli).
 
 ---
 
@@ -225,3 +226,111 @@ Reassigned Numbers Database is supported as a scrub list (`rnd`) but is not in
 **This is a guardrail, not legal advice.** TCPA damages run $500–$1,500 per
 call with no cap. Have a telecom attorney review your consent language and
 your lead vendors' consent trail before you dial anything.
+
+---
+
+# Dialer Pacer
+
+`dialer_compliance.py` answers *may I call this person*. This answers *may I
+dial several people at once and take whoever answers first*. Different
+questions, different law.
+
+When you dial several lines and connect to the first answer, everyone else who
+picked up gets dropped. Those are abandoned calls, and they are metered: no
+more than **3% of calls answered live by a person**, per campaign, over a
+rolling 30 days. This module measures that rate from your own call history and
+sets the line count itself, instead of letting you pick a number and hope.
+
+## The arithmetic decides the design
+
+Abandoned calls are the answers you couldn't take, so with **one agent** every
+simultaneous second answer is an abandonment:
+
+```
+  human answer rate |  2 lines   3 lines   4 lines   5 lines
+  ------------------+-------------------------------------------
+                 5% |    2.5%      4.9%*     7.3%*     9.5%*
+                10% |    5.0%*     9.7%*    14.0%*    18.1%*
+                20% |   10.0%*    18.7%*    26.2%*    32.8%*
+                                                  * over the 3% ceiling
+```
+
+Only the 5% / 2-line cell fits. **Multi-line dialing is a feature of agent
+pools** — the pool absorbs the extra answers. The same 10% answer rate that
+allows one line at one agent allows five lines at three agents, and twelve at
+six.
+
+So at one agent the governor will say one line, and that is the correct
+answer rather than a cautious one. The speed you actually want there comes
+from answering-machine detection and instant auto-advance: roughly three
+quarters of dials never reach a human, and skipping those is where the
+throughput lives. Machine pickups are not "answered by a person", so they cost
+nothing against the ceiling — which is exactly why AMD buys headroom.
+
+## Usage
+
+```bash
+python dialer_pacer.py simulate --answer-rate 0.10 --agents 1
+python dialer_pacer.py campaign create "FE September"
+python dialer_pacer.py pace "FE September" --agents 1
+python dialer_pacer.py record "FE September" --lines 2 --agents 1 \
+    --results human,no_answer --ring-seconds 16
+python dialer_pacer.py report "FE September"
+```
+
+## Governor states
+
+| State | Meaning |
+|---|---|
+| `MEASURING` | Not enough dials yet to trust an answer rate. One line. |
+| `NORMAL` | Line count computed from the measured rate and agent count. |
+| `THROTTLED` | Measured abandonment hit 2.0%, or setup is incomplete. One line. |
+| `HALTED` | Measured abandonment hit 2.7%. Dialing stops. |
+
+Thresholds sit below the 3% legal ceiling so ordinary variance never pushes
+the real rate through it. The governor also forces a single line when
+`SELLER_NAME` / `CALLBACK_NUMBER` are unset, because an abandoned call that
+cannot identify the seller is a violation on its own.
+
+## Resuming a halt is honest about the window
+
+Clearing the halt flag does not clear the history the rate is computed from:
+
+```
+Resumed 'Trace'. It restarts at one line and must re-earn more.
+
+  Heads up: the measured rate is still 11.11%, over the 2.7% halt threshold,
+  so the next `pace` call will halt it again. The rate is computed over a
+  rolling 30 days, and clearing the halt does not clear that history.
+  The oldest call in the window ages out 2026-10-30.
+```
+
+## What it enforces
+
+- **3% ceiling**, governed to 1.5% with a throttle at 2.0% and a halt at 2.7%.
+- **15 seconds / 4 rings** minimum before hanging up an unanswered call —
+  `record_burst` rejects anything shorter.
+- **2-second connect deadline**; past it the call is abandoned and owes the
+  recorded identification message.
+- **Identification message** naming the seller and a callback number, tracked
+  per abandoned call. Abandoning without one shows up as `silent_drops` and
+  throttles the campaign.
+- **Safe-harbor records** via `report`.
+
+## Known limits
+
+It models and records; it does not place calls. Wiring it to Twilio means
+calling `pace` for the line count, dialing that many with `AsyncAmd=true`,
+bridging the first human answer, and playing the identification message to any
+other human that picks up — then handing all of it back through `record_burst`.
+
+The 3% ceiling is federal. At least a dozen states now run stricter mini-TCPA
+regimes — Florida and Oklahoma use an 8pm curfew and three-call caps,
+Pennsylvania measures the window against the consumer's local time, Virginia's
+SB 1339 took effect January 2026 — and none of that is modeled here. If you
+write in those states, tighten the settings by hand.
+
+**This is a guardrail, not legal advice.** Predictive dialing is the most
+heavily litigated corner of outbound calling. Have a telecom attorney sign off
+on your pacing configuration and your abandonment message before dialing
+multi-line.
