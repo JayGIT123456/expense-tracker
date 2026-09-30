@@ -1,6 +1,7 @@
 # Cowork exercises
 
-Two small command-line tools. See [Call Logger](#call-logger) and
+Four small command-line tools. See [Dialer Compliance Gate](#dialer-compliance-gate),
+[Dialer Pacer](#dialer-pacer), [Call Logger](#call-logger) and
 [Expense Tracker CLI](#expense-tracker-cli).
 
 ---
@@ -108,3 +109,228 @@ By default, data is stored in `expenses.csv` next to the script. Pass
 - `summary [--month YYYY-MM]` — spending breakdown by category with percentages
 - `delete <id>` — remove an expense by its ID
 
+
+---
+
+# Dialer Compliance Gate
+
+Layer 1 of the power dialer: the thing that decides whether a lead may be
+called *right now*, and writes down why. It places no calls. The dialer asks
+it, and dials only on an explicit ALLOW.
+
+Every check fails closed. Missing consent, a stale DNC scrub, an unknown time
+zone, a scrub that was never run — all produce the same answer: BLOCKED. A
+lead becomes callable by having its paperwork in order, never by having no
+paperwork at all.
+
+## Usage
+
+```bash
+python dialer_compliance.py init
+python dialer_compliance.py import sample_leads.csv
+python dialer_compliance.py scrub set 3055550182 --list federal --result clear
+python dialer_compliance.py check 3055550182
+python dialer_compliance.py next --limit 25
+python dialer_compliance.py attempt 3055550182 --outcome no_answer
+python dialer_compliance.py audit --phone 3055550182
+```
+
+## Example output
+
+```
+BLOCK  9155550123
+  [block]   consent on file is 'express'; prior express WRITTEN consent required
+  [block]   written consent is missing capture IP
+  [block]   listed on the federal list
+  [block]   never scrubbed against the litigator list
+  [block]   outside the 08:00-21:00 calling window in America/Chicago 23:07,
+            America/Denver 22:07
+  [warn]    consent is 268 days old
+  [note]    Rosa Nieves — LifeQuoteForm
+```
+
+## What it checks
+
+1. **Internal DNC** — permanent, and never removable through the CLI.
+2. **Consent** — type, timestamp, source, and for written consent the capture
+   IP, source URL and the exact disclosure language shown to the lead.
+3. **DNC scrubs** — federal, state and litigator, each needing a `clear`
+   result no older than 31 days (the federal safe harbor).
+4. **Calling window** — 8am–9pm in the called party's local time.
+5. **Frequency** — 8 attempts lifetime, 2 per day, 4 hours apart.
+
+## Time zones are handled conservatively
+
+A state can span two zones, so the window has to be open in **all** of them
+before the call is allowed. Texas is the clearest case:
+
+```
+Central 07:30 / Mountain 06:30  BLOCK
+Central 08:30 / Mountain 07:30  BLOCK   <- El Paso is still closed
+Central 09:30 / Mountain 08:30  ALLOW
+Central 20:30 / Mountain 19:30  ALLOW
+Central 21:30 / Mountain 20:30  BLOCK
+```
+
+Dialing an hour late is a nuisance. Dialing an hour early is a violation.
+
+Zone comes from the lead's address. The area code is only a cross-check,
+because people keep their mobile number when they move — a disagreement
+raises a warning, and a lead with no address at all is blocked outright
+(`BLOCK_WHEN_TIMEZONE_UNKNOWN`).
+
+## Wiring up a DNC vendor
+
+`ScrubProvider` is the plug point for DNC.com, Blacklist Alliance or whoever
+you use. The shipped default is `NullScrubProvider`, which refuses to answer —
+so forgetting to configure a vendor stops the queue instead of silently
+approving every call. Until one is wired up, record results by hand with
+`scrub set`.
+
+## The audit log is append-only
+
+SQLite triggers reject every UPDATE and DELETE against the `audit` table:
+
+```
+UPDATE rejected: audit log is append-only
+DELETE rejected: audit log is append-only
+```
+
+A compliance log you can quietly edit after the fact is worth nothing in front
+of a regulator. This is also why the tool uses SQLite rather than a CSV like
+the others here — the trail has to survive a crash mid-write.
+
+## Tuning it
+
+The `SETTINGS` block at the top of `dialer_compliance.py` holds every
+compliance decision the tool makes: the calling window, scrub freshness, which
+lists are required, whether written consent is mandatory, and the contact
+frequency caps. They default to the strictest reading. Loosen them
+deliberately.
+
+`REQUIRE_WRITTEN_CONSENT` is the one to leave alone. Consent law is currently
+split — the 11th Circuit vacated the FCC's one-to-one rule in January 2025,
+and in February 2026 the 5th Circuit held the TCPA requires only prior express
+consent, binding just TX/LA/MS. Building to the strictest standard costs
+nothing and is the only posture that survives the split.
+
+## Known limits
+
+It records scrub *results*; it does not call a DNC vendor for you until you
+wire one into `ScrubProvider`. State-level calling-hour rules that are
+stricter than the federal 8am–9pm are not tracked per state — tighten
+`CALL_WINDOW_START` / `CALL_WINDOW_END` if you write in those states. The
+Reassigned Numbers Database is supported as a scrub list (`rnd`) but is not in
+`REQUIRED_SCRUB_LISTS` by default.
+
+**This is a guardrail, not legal advice.** TCPA damages run $500–$1,500 per
+call with no cap. Have a telecom attorney review your consent language and
+your lead vendors' consent trail before you dial anything.
+
+---
+
+# Dialer Pacer
+
+`dialer_compliance.py` answers *may I call this person*. This answers *may I
+dial several people at once and take whoever answers first*. Different
+questions, different law.
+
+When you dial several lines and connect to the first answer, everyone else who
+picked up gets dropped. Those are abandoned calls, and they are metered: no
+more than **3% of calls answered live by a person**, per campaign, over a
+rolling 30 days. This module measures that rate from your own call history and
+sets the line count itself, instead of letting you pick a number and hope.
+
+## The arithmetic decides the design
+
+Abandoned calls are the answers you couldn't take, so with **one agent** every
+simultaneous second answer is an abandonment:
+
+```
+  human answer rate |  2 lines   3 lines   4 lines   5 lines
+  ------------------+-------------------------------------------
+                 5% |    2.5%      4.9%*     7.3%*     9.5%*
+                10% |    5.0%*     9.7%*    14.0%*    18.1%*
+                20% |   10.0%*    18.7%*    26.2%*    32.8%*
+                                                  * over the 3% ceiling
+```
+
+Only the 5% / 2-line cell fits. **Multi-line dialing is a feature of agent
+pools** — the pool absorbs the extra answers. The same 10% answer rate that
+allows one line at one agent allows five lines at three agents, and twelve at
+six.
+
+So at one agent the governor will say one line, and that is the correct
+answer rather than a cautious one. The speed you actually want there comes
+from answering-machine detection and instant auto-advance: roughly three
+quarters of dials never reach a human, and skipping those is where the
+throughput lives. Machine pickups are not "answered by a person", so they cost
+nothing against the ceiling — which is exactly why AMD buys headroom.
+
+## Usage
+
+```bash
+python dialer_pacer.py simulate --answer-rate 0.10 --agents 1
+python dialer_pacer.py campaign create "FE September"
+python dialer_pacer.py pace "FE September" --agents 1
+python dialer_pacer.py record "FE September" --lines 2 --agents 1 \
+    --results human,no_answer --ring-seconds 16
+python dialer_pacer.py report "FE September"
+```
+
+## Governor states
+
+| State | Meaning |
+|---|---|
+| `MEASURING` | Not enough dials yet to trust an answer rate. One line. |
+| `NORMAL` | Line count computed from the measured rate and agent count. |
+| `THROTTLED` | Measured abandonment hit 2.0%, or setup is incomplete. One line. |
+| `HALTED` | Measured abandonment hit 2.7%. Dialing stops. |
+
+Thresholds sit below the 3% legal ceiling so ordinary variance never pushes
+the real rate through it. The governor also forces a single line when
+`SELLER_NAME` / `CALLBACK_NUMBER` are unset, because an abandoned call that
+cannot identify the seller is a violation on its own.
+
+## Resuming a halt is honest about the window
+
+Clearing the halt flag does not clear the history the rate is computed from:
+
+```
+Resumed 'Trace'. It restarts at one line and must re-earn more.
+
+  Heads up: the measured rate is still 11.11%, over the 2.7% halt threshold,
+  so the next `pace` call will halt it again. The rate is computed over a
+  rolling 30 days, and clearing the halt does not clear that history.
+  The oldest call in the window ages out 2026-10-30.
+```
+
+## What it enforces
+
+- **3% ceiling**, governed to 1.5% with a throttle at 2.0% and a halt at 2.7%.
+- **15 seconds / 4 rings** minimum before hanging up an unanswered call —
+  `record_burst` rejects anything shorter.
+- **2-second connect deadline**; past it the call is abandoned and owes the
+  recorded identification message.
+- **Identification message** naming the seller and a callback number, tracked
+  per abandoned call. Abandoning without one shows up as `silent_drops` and
+  throttles the campaign.
+- **Safe-harbor records** via `report`.
+
+## Known limits
+
+It models and records; it does not place calls. Wiring it to Twilio means
+calling `pace` for the line count, dialing that many with `AsyncAmd=true`,
+bridging the first human answer, and playing the identification message to any
+other human that picks up — then handing all of it back through `record_burst`.
+
+The 3% ceiling is federal. At least a dozen states now run stricter mini-TCPA
+regimes — Florida and Oklahoma use an 8pm curfew and three-call caps,
+Pennsylvania measures the window against the consumer's local time, Virginia's
+SB 1339 took effect January 2026 — and none of that is modeled here. If you
+write in those states, tighten the settings by hand.
+
+**This is a guardrail, not legal advice.** Predictive dialing is the most
+heavily litigated corner of outbound calling. Have a telecom attorney sign off
+on your pacing configuration and your abandonment message before dialing
+multi-line.
