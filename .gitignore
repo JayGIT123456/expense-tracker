@@ -1,0 +1,5 @@
+dialer.db
+dialer.db-wal
+dialer.db-shm
+__pycache__/
+*.pyc

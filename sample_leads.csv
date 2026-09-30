@@ -1,0 +1,7 @@
+phone,first_name,last_name,state,zip,source,consent_type,consent_timestamp,consent_ip,consent_url,consent_text
+3055550182,Marcus,Delgado,FL,33139,LifeQuoteForm,written,2026-09-15T14:22:11Z,203.0.113.44,https://example-quotes.test/life,"By clicking Get My Quote I agree to receive calls and texts, including by automated means, at the number provided from Jay Insurance Agency about life insurance. Consent is not a condition of purchase."
+2125550147,Priya,Raman,NY,10011,LifeQuoteForm,written,2026-09-28T09:05:00Z,198.51.100.9,https://example-quotes.test/life,"By clicking Get My Quote I agree to receive calls and texts, including by automated means, at the number provided from Jay Insurance Agency about life insurance. Consent is not a condition of purchase."
+8085550110,Keone,Akana,HI,96813,LifeQuoteForm,written,2026-09-20T18:00:00Z,203.0.113.77,https://example-quotes.test/life,"By clicking Get My Quote I agree to receive calls and texts, including by automated means, at the number provided from Jay Insurance Agency about life insurance. Consent is not a condition of purchase."
+4155550190,Dana,Whitfield,,,PurchasedList,,,,,
+9155550123,Rosa,Nieves,TX,79901,LifeQuoteForm,express,2026-01-04T12:00:00Z,,,
+6175550166,Tom,Brennan,MA,02116,LifeQuoteForm,written,2026-09-25T11:30:00Z,192.0.2.15,https://example-quotes.test/life,"By clicking Get My Quote I agree to receive calls and texts, including by automated means, at the number provided from Jay Insurance Agency about life insurance. Consent is not a condition of purchase."
